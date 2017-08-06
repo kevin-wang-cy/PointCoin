@@ -51,12 +51,16 @@ unsigned int nTargetSpacingPoS = 120; // 2 min
 unsigned int nTargetSpacingPoW = 120;
 // this is set in globalparams.cpp
 // int nStakeMinConfirmations = 4320; // approximate 12 day maturity
-unsigned int nStakeMinAge = 60 * 60 * 24 * 12; // 12 days
-unsigned int nStakeMaxAge = 60 * 60 * 24 * 24; // 24 days
+unsigned int nStakeMinAge = 60 * 60 * 24 * 12;  // 12 days
+unsigned int nStakeMinAgeTestNet = 5 * 60;      // test net min age is 10 min
+unsigned int nStakeMaxAge = 60 * 60 * 24 * 24;  // 24 days
+unsigned int nStakeMaxAgeTestNet = 60 * 60;     // 60 minutes
 // time to elapse before new modifier is computed (10 blocks)
 unsigned int nModifierInterval = 30 * 60;
+unsigned int nModifierIntervalTestNet = 30; // 30 s (time to elapse before new modifier is computed)
 
 int nCoinbaseMaturity = 240; // 240 blocks (12 hr)
+int nCoinbaseMaturityTestNet = 5; // test maturity is 5 blocks
 CBlockIndex* pindexGenesisBlock = NULL;
 int nBestHeight = -1;
 
@@ -136,10 +140,10 @@ void UnregisterWallet(CWallet* pwalletIn)
 }
 
 // check whether the passed transaction is from us
-bool static IsFromMe(CTransaction& tx)
+bool static IsFromMe(CTransaction& tx, bool fMultiSig)
 {
     BOOST_FOREACH(CWallet* pwallet, setpwalletRegistered)
-        if (pwallet->IsFromMe(tx))
+        if (pwallet->IsFromMe(tx, fMultiSig))
             return true;
     return false;
 }
@@ -163,13 +167,16 @@ void static EraseFromWallets(uint256 hash)
 // make sure all wallets know about the given transaction, in the given block
 void SyncWithWallets(const CTransaction& tx, const CBlock* pblock, bool fUpdate, bool fConnect)
 {
+    // no reason why multisig should prevent a tx from syncing with all wallets
+    static const bool fMultiSig = true;
+
     if (!fConnect)
     {
         // ppcoin: wallets need to refund inputs when disconnecting coinstake
         if (tx.IsCoinStake())
         {
             BOOST_FOREACH(CWallet* pwallet, setpwalletRegistered)
-                if (pwallet->IsFromMe(tx))
+                if (pwallet->IsFromMe(tx, fMultiSig))
                     pwallet->DisableTransaction(tx);
         }
         return;
@@ -686,8 +693,15 @@ bool CTransaction::CheckTransaction() const
     return true;
 }
 
-int64_t CTransaction::GetMinFee(unsigned int nBlockSize, enum GetMinFee_mode mode, unsigned int nBytes) const
+int64_t CTransaction::GetMinFee(const CBlockIndex* pindexPrev, unsigned int nBlockSize,
+                                enum GetMinFee_mode mode, unsigned int nBytes) const
 {
+    // will happen for dummy transactions
+    if (!pindexPrev)
+    {
+       pindexPrev = pindexBest;
+    }
+
     if (this->IsCoinBase() || this->IsCoinStake())
     {
          return 0;
@@ -719,9 +733,11 @@ int64_t CTransaction::GetMinFee(unsigned int nBlockSize, enum GetMinFee_mode mod
         nMinFee *= MAX_BLOCK_SIZE_GEN / (MAX_BLOCK_SIZE_GEN - nNewBlockSize);
     }
 
-    if (nVersion >= 2) {
+    // fees were too much and the extra fees were never included
+    if ((pindexPrev->nHeight + 1) >= FEE_ADJUSTMENT_01_BLOCK) {
+       nMinFee /= 100;
        // ensure they pay their service fees, which are tacked on flat
-       nMinFee += this->GetSwiftFee();
+       nMinFee += this->GetServiceFee();
        // ensure they pay their OP_RETURN fees, which are also tacked on flat
        nMinFee += this->GetOpRetFee();
     }
@@ -730,15 +746,16 @@ int64_t CTransaction::GetMinFee(unsigned int nBlockSize, enum GetMinFee_mode mod
     {
         nMinFee = MAX_MONEY[nFeeColor];
     }
+
     return nMinFee;
 }
 
-// Swift Fee
-int64_t CTransaction::GetSwiftFee() const {
+// Service Fee
+int64_t CTransaction::GetServiceFee() const {
     int nFeeColor = FEE_COLOR[this->GetColor()];
-    int64_t nSwiftFee = 0;
-    nSwiftFee = COMMENT_FEE_PER_CHAR[nFeeColor] * strTxComment.size();
-    return nSwiftFee;
+    int64_t nServiceFee = 0;
+    nServiceFee = COMMENT_FEE_PER_CHAR[nFeeColor] * strTxComment.size();
+    return nServiceFee;
 }
 
 
@@ -812,6 +829,9 @@ int64_t CTransaction::GetOpRetFee() const {
 bool CTxMemPool::accept(CTxDB& txdb, CTransaction &tx, bool fCheckInputs,
                         bool* pfMissingInputs)
 {
+    // no reason why multisig should be treated differently for accept to mempool
+    static const bool fMultiSig = true;
+
     AssertLockHeld(cs_main);
     if (pfMissingInputs)
         *pfMissingInputs = false;
@@ -930,7 +950,7 @@ bool CTxMemPool::accept(CTxDB& txdb, CTransaction &tx, bool fCheckInputs,
         unsigned int nSize = ::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION);
 
         // Don't accept it if it can't get into a block (assume block is 1% full?)
-        int64_t txMinFee = tx.GetMinFee(MAX_BLOCK_SIZE/100, GMF_RELAY, nSize);
+        int64_t txMinFee = tx.GetMinFee(pindexBest, MAX_BLOCK_SIZE/100, GMF_RELAY, nSize);
         if (nFees < txMinFee)
             return error("CTxMemPool::accept() : not enough fees %s, %" PRId64 " < %" PRId64,
                          hash.ToString().c_str(),
@@ -953,7 +973,7 @@ bool CTxMemPool::accept(CTxDB& txdb, CTransaction &tx, bool fCheckInputs,
                 nLastTime = nNow;
                 // -limitfreerelay unit is thousand-bytes-per-minute
                 // At default rate it would take over a month to fill 1GB
-                if (dFreeCount > GetArg("-limitfreerelay", 15)*10*1000 && !IsFromMe(tx))
+                if (dFreeCount > GetArg("-limitfreerelay", 15)*10*1000 && !IsFromMe(tx, fMultiSig))
                     return error("CTxMemPool::accept() : free transaction rejected by rate limiter");
                 if (fDebug)
                     printf("Rate limit dFreeCount: %g => %g\n", dFreeCount, dFreeCount+nSize);
@@ -1302,7 +1322,7 @@ void static PruneOrphanBlocks()
 // miner's coin base reward
 struct AMOUNT GetPoWSubsidy(int nHeight)
 {
-
+    static const int nLastPoWBlock = GetLastPoWBlock();
     struct AMOUNT stSubsidy;
     stSubsidy.nValue = 0;
     // the only PoW reward currency is XPP
@@ -1313,7 +1333,7 @@ struct AMOUNT GetPoWSubsidy(int nHeight)
         // premine
         stSubsidy.nValue = POW_SUBSIDY[nHeight];
     }
-    else if (nHeight <= LAST_POW_BLOCK)
+    else if (nHeight <= nLastPoWBlock)
     {
         // small reward for debugging only, can be burned
         // total will be 1152
@@ -1349,12 +1369,27 @@ struct AMOUNT GetProofOfStakeReward(CBlockIndex* pindexPrev)
     static const int nBlocksPerYear = 262980;   // 262980 blocks/yr @120s
     int nYears = pindexPrev->nHeight / nBlocksPerYear;
     // rate drops 3% every 3 years
-    int nRate = std::max(3, 33 - (3 * (nYears / 3)));
+    int nRate;
+    if (pindexPrev->nTime >= STAKE_ADJUSTMENT_01_TIME)
+    {
+        // real rate is 0.1%, but will divide by 10 below
+        nRate  = 1;
+    }
+    else
+    {
+        nRate  = std::max(3, 33 - (3 * (nYears / 3)));
+    }
     // XPP is the only mint color ever
     int mintColor = (int) PNTS_COLOR_XPP;
     int nStakeColor = (int) PNTS_COLOR_XPP;
     int64_t supply = pindexPrev->vMoneySupply[mintColor];
     int64_t nSubsidy = (nRate * (supply / 100)) / nBlocksPerYear;
+
+    if (pindexPrev->nTime >= STAKE_ADJUSTMENT_01_TIME)
+    {
+         // real rate is 0.1%
+         nSubsidy /= 10;
+    }
 
     if (fDebug && GetBoolArg("-printcreation"))
     {
@@ -1425,7 +1460,7 @@ unsigned int PointCoinGravityWave(const CBlockIndex* pindexLast, bool fProofOfSt
 
     CBigNum bnTargetLimit = fProofOfStake ? bnProofOfStakeLimit : bnProofOfWorkLimit;
 
-    int64_t nTargetSpacing = fProofOfStake ? nTargetSpacingPoS : nTargetSpacingPoW;
+    int64_t nTargetSpacing = GetTargetSpacing(fProofOfStake);
 
     const CBlockIndex* pindexPrev = GetLastBlockIndex(pindexLast, fProofOfStake);
 
@@ -1935,11 +1970,11 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, MapPrevTx inputs, map<uint256,
                 }
 
                 // enforce transaction fees for every block
-                if (nTxFee < GetMinFee())
+                if (nTxFee < GetMinFee(pindexBlock->pprev))
                 {
                     return fBlock? DoS(100, error("ConnectInputs() : %s not paying required fee=%s, paid=%s",
                               GetHash().ToString().substr(0,10).c_str(),
-                              FormatMoney(GetMinFee(), nFeeColor).c_str(),
+                              FormatMoney(GetMinFee(pindexBlock->pprev), nFeeColor).c_str(),
                               FormatMoney(nTxFee, nFeeColor).c_str())) : false;
                 }
 
@@ -2381,14 +2416,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
                  }
                  if (!Solver(txout.scriptPubKey, whichType, vSolutions))
                  {
-                     if (tx.nTime < STAKING_FIX1_TIME)
-                     {
-                         return error("Connect() : cannot connect tx with nonstandard output");
-                     }
-                     else
-                     {
-                         continue;
-                     }
+                     continue;
                  }
                  // subtract burned coins from both money supply and total mint
                  if (whichType == TX_NULL_DATA)
@@ -2944,6 +2972,9 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
 
 bool CBlock::AcceptBlock()
 {
+    static const int nLastPoWBlock = GetLastPoWBlock();
+    static const int nFirstPoSBlock = GetFirstPoSBlock();
+
     AssertLockHeld(cs_main);
     // Check for duplicate
     uint256 hash = GetHash();
@@ -2958,13 +2989,13 @@ bool CBlock::AcceptBlock()
     int nHeight = pindexPrev->nHeight+1;
 
 #if PROOF_MODEL == PURE_POS
-    if (IsProofOfWork() && (nHeight > LAST_POW_BLOCK))
+    if (IsProofOfWork() && (nHeight > nLastPoWBlock))
     {
         return DoS(100, error("AcceptBlock() : reject proof-of-work (too late) at height %d", nHeight));
     }
 
     // PointCoin: PoS does not start until PoW is finished
-    if (IsProofOfStake() && (nHeight < FIRST_POS_BLOCK))
+    if (IsProofOfStake() && (nHeight < nFirstPoSBlock))
     {
         return DoS(100, error("AcceptBlock() : reject proof-of-stake (too soon) at height %d", nHeight));
     }
@@ -3277,7 +3308,7 @@ bool CBlock::SignBlock(CWallet& wallet, int64_t nFees[])
     // mint comes before stake in vtx
     // CTransaction txCoinMint = vtx[0];
     CTransaction txCoinStake;
-    txCoinStake.nTime &= ~STAKE_TIMESTAMP_MASK;
+    txCoinStake.nTime &= ~GetStakeTimestampMask();
 
     int64_t nSearchTime = vtx[0].nTime = txCoinStake.nTime; // search to current time
 
@@ -3458,20 +3489,17 @@ bool LoadBlockIndex(bool fAllowNew)
 
     if (fTestNet)
     {
-        pchMessageStart[0] = 0xec;
-        pchMessageStart[1] = 0xda;
-        pchMessageStart[2] = 0xfe;
-        pchMessageStart[3] = 0xea;
+        for (int i = 0; i < 4; ++i)
+        {
+           pchMessageStart[i] = pchMessageStartTestnet[i];
+        }
 
-        nTargetSpacingPoS = 30; // 60 sec
-        nTargetSpacingPoW = 30; // 60 sec
         bnProofOfWorkLimit = bnProofOfWorkLimitTestNet;
         bnProofOfStakeLimit = bnProofOfStakeLimitTestNet;
-        nStakeMinAge = 5 * 60; // test net min age is 10 min
-        nCoinbaseMaturity = 5; // test maturity is 10 blocks
-        nModifierInterval = 60; // 60 s (time to elapse before new modifier is computed)
-        // nLaunchTime = 1415868300;
-        nStakeMaxAge = 60 * 60; // 60 minutes
+        nStakeMinAge = nStakeMinAgeTestNet;
+        nCoinbaseMaturity = nCoinbaseMaturityTestNet;
+        nModifierInterval = nModifierIntervalTestNet;
+        nStakeMaxAge = nStakeMaxAgeTestNet;
     }
 
     //
@@ -3945,13 +3973,6 @@ void static ProcessGetData(CNode* pfrom)
 }
 #endif
 
-
-
-
-// The message start string is designed to be unlikely to occur in normal data.
-// The characters are rarely used upper ASCII, not valid as UTF-8, and produce
-// a large 4-byte int at any alignment.
-unsigned char pchMessageStart[4] = { 0xfd, 0xeb, 0xdf, 0xfb };
 
 bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 {

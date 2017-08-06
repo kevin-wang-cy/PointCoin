@@ -9,7 +9,6 @@
 #include "kernel.h"
 
 // from main.cpp
-extern unsigned int nTargetSpacingPoS;
 extern unsigned int nLaunchTime;
 
 using namespace std;
@@ -340,7 +339,7 @@ CBlock* CreateNewBlock(CWallet* pwallet, bool fProofOfStake, int64_t pFees[])
                 continue;
 
             // Transaction fee
-            // int64_t nMinFee = tx.GetMinFee(nBlockSize, GMF_BLOCK);
+            // int64_t nMinFee = tx.GetMinFee(pindexPrev, nBlockSize, GMF_BLOCK);
 
             // Skip free transactions if we're past the minimum block size:
             if (fSortedByFee && (dFeePerKb < vMinTxFee[nFeeColor]) &&
@@ -653,8 +652,10 @@ void StakeMiner(CWallet *pwallet)
     RenameThread("pointcoin-miner");
 
 #if PROOF_MODEL == PURE_POS
-    //  
-    unsigned int nMilliWaitForPoS = nTargetSpacingPoS * 1000 / 2;
+    //
+    static const int nFirstPoSBlock = GetFirstPoSBlock();
+    int nTargetSpacing = GetTargetSpacing(true);
+    unsigned int nMilliWaitForPoS = nTargetSpacing * 1000 / 2;
 #endif
 
     bool fTryToSync = true;
@@ -692,7 +693,7 @@ void StakeMiner(CWallet *pwallet)
         }
 
 #if PROOF_MODEL == PURE_POS
-        if (pindexBest->nHeight < (FIRST_POS_BLOCK - 1))
+        if (pindexBest->nHeight < (nFirstPoSBlock - 1))
         {
              MilliSleep(nMilliWaitForPoS);
              continue;
@@ -713,7 +714,8 @@ void StakeMiner(CWallet *pwallet)
             SetThreadPriority(THREAD_PRIORITY_NORMAL);
             CheckStake(pblock.get(), *pwallet);
             SetThreadPriority(THREAD_PRIORITY_LOWEST);
-            MilliSleep(nTargetSpacingPoS * 1000);
+            int nTargetSpacing = GetTargetSpacing(true);
+            MilliSleep(nTargetSpacing * 1000);
         }
         else
         {

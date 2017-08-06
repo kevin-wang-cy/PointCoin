@@ -332,8 +332,9 @@ std::string HelpMessage()
         "  -rpcsslprivatekeyfile=<file.pem>         " + _("Server private key (default: server.pem)") + "\n" +
         "  -rpcsslciphers=<ciphers>                 " + _("Acceptable ciphers (default: TLSv1+HIGH:!SSLv2:!aNULL:!eNULL:!AH:!3DES:@STRENGTH)") + "\n" +
 
+        "  -burnkey=<key>    " + _("Random string") + "\n" +
 
-        "  -burnkey=<key>    " + _("Random string") + "\n" ;
+        "  -enablemultisigs  " + _("Enable rpc multisig support by default") + "\n" ;
 
     return strUsage;
 }
@@ -386,7 +387,7 @@ bool AppInit2()
 #endif
 
     // ensure that there is not a gap where no blocks can be signed
-    assert ((FIRST_POS_BLOCK - 1) <= LAST_POW_BLOCK);
+    assert ((GetFirstPoSBlock() - 1) <= GetLastPoWBlock());
 
     // basic multicurrency checks and setup
     {
@@ -899,7 +900,8 @@ bool AppInit2()
                 static const char *(*strAddedNodes)[1] =
                           fTestNet ? strTestNetAddedNodes : strMainNetAddedNodes;
 
-                for (unsigned int i = 0; strAddedNodes[i][0] != NULL; i++) {
+                for (unsigned int i = 0; strAddedNodes[i][0] != NULL; i++)
+                {
                    mapMultiArgs["-addnode"].push_back(strAddedNodes[i][0]);
                 }
             }

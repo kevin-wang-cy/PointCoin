@@ -30,32 +30,11 @@ class CInv;
 class CRequestTracker;
 class CNode;
 
-#if PROOF_MODEL == PURE_POS
-// must have a last PoW block if it is to be pure PoS
-// optional overlap between PoW and PoS
-#if TESTNET_BUILD
-static const int LAST_POW_BLOCK = 5760;  // 5760 -> 4 days
-static const int FIRST_POS_BLOCK = 5761;
-#else
-static const int LAST_POW_BLOCK = 5760;
-static const int FIRST_POS_BLOCK = 5761;
-#endif  // TESTNET_BUILD
-#elif PROOF_MODEL == MIXED_POW_POS
-#if TESTNET_BUILD
-//
-#else
-//
-#endif  // TESTNET_BUILD
-#endif  // PROOF_MODEL
-
 // accept no PoW before Sun, 11 Dec 2016 10:00:00 GMT
 static const unsigned int LAUNCH_TIME = 1481450400;
 
 // Fri Jul  8 12:00:00 2016 PDT
 static const unsigned int BURN_PROTOCOL_START_TIME = 1468004400;
-
-// Wed Jul 20 00:00:00 2016 PDT
-static const unsigned int STAKING_FIX1_TIME = 1468998000;
 
 /** The maximum allowed size for a serialized block, in bytes (network rule) */
 static const unsigned int MAX_BLOCK_SIZE = 1000000;
@@ -101,8 +80,8 @@ static const uint256
 
 // blackcoin pos 2.0 drift recommendations
 // inline int64_t PastDrift(CBlockIndex *pprev)   {return pprev->nTime; } // time of last block
-inline int64_t FutureDrift(int64_t nTime) { return nTime + 17; } // up to 17 sec in the future
-                                                                 //   relative prime to 300
+inline int64_t FutureDrift(int64_t nTime) {
+                  return fTestNet ? nTime + 7 : nTime + 17; } // up to 17 sec in the future
 
 extern CScript COINBASE_FLAGS;
 extern CCriticalSection cs_main;
@@ -520,9 +499,6 @@ class CTransaction
 public:
     // versions
     //    1 : launch
-    //    2 : after pow
-    //        support for tx comments (strTxComment)
-    //        support for productivity type identifiers (nServiceTypeID)
     static const int CURRENT_VERSION = 1;
     int nVersion;
     unsigned int nTime;
@@ -827,7 +803,8 @@ public:
 
     void FillValuesIn(const MapPrevTx& inputs, std::map<int, int64_t> &mapValuesIn) const;
 
-    int64_t GetMinFee(unsigned int nBlockSize=1, enum GetMinFee_mode mode=GMF_BLOCK, unsigned int nBytes = 0) const;
+    int64_t GetMinFee(const CBlockIndex* pindexPrev, unsigned int nBlockSize=1,
+                      enum GetMinFee_mode mode=GMF_BLOCK, unsigned int nBytes = 0) const;
 
     bool ReadFromDisk(CDiskTxPos pos, FILE** pfileRet=NULL)
     {
@@ -954,7 +931,7 @@ public:
     bool AcceptToMemoryPool(CTxDB& txdb, bool fCheckInputs=true, bool* pfMissingInputs=NULL);
     bool GetCoinAge(CTxDB& txdb, const CBlockIndex* pindexPrev, uint64_t& nCoinAge) const;  // ppcoin: get transaction coin age
 
-    int64_t GetSwiftFee() const;
+    int64_t GetServiceFee() const;
     int64_t GetOpRetFee() const;
 
 protected:

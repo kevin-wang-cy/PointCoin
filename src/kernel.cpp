@@ -12,7 +12,6 @@
 using namespace std;
 
 extern unsigned int nStakeMaxAge;
-extern unsigned int nTargetSpacingPoS;
 
 typedef std::map<int, unsigned int> MapModifierCheckpoints;
 
@@ -154,7 +153,8 @@ bool ComputeNextStakeModifier(const CBlockIndex* pindexPrev, uint256& bnStakeMod
 
     // Sort candidate blocks by timestamp
     vector<pair<int64_t, uint256> > vSortedByTimestamp;
-    vSortedByTimestamp.reserve(64 * nModifierInterval / nTargetSpacingPoS);
+    int nTargetSpacing = GetTargetSpacing(true);
+    vSortedByTimestamp.reserve(64 * nModifierInterval / nTargetSpacing);
     int64_t nSelectionInterval = GetStakeModifierSelectionInterval();
     int64_t nSelectionIntervalStart = (pindexPrev->GetBlockTime() / nModifierInterval) * nModifierInterval - nSelectionInterval;
     const CBlockIndex* pindex = pindexPrev;
@@ -361,7 +361,7 @@ bool CheckProofOfStake(CBlockIndex* pindexPrev, const CTransaction& tx, unsigned
 // Check whether the coinstake timestamp meets protocol
 bool CheckCoinStakeTimestamp(int64_t nTimeBlock, int64_t nTimeTx)
 {
-    int nStakeTimestampMask = fTestNet ? STAKE_TIMESTAMP_MASK_TESTNET : STAKE_TIMESTAMP_MASK;
+    int nStakeTimestampMask = GetStakeTimestampMask();
     return (nTimeBlock == nTimeTx) && ((nTimeTx & nStakeTimestampMask) == 0);
 }
 

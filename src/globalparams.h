@@ -45,6 +45,12 @@
 
 extern bool fTestNet;
 
+//////////////////////////////////////////////////////////////////////
+
+// forks
+extern int const FEE_ADJUSTMENT_01_BLOCK;
+
+extern unsigned int const STAKE_ADJUSTMENT_01_TIME;
 
 // networking
 extern unsigned short const TOR_PORT;
@@ -58,6 +64,11 @@ extern unsigned short const DEFAULT_PROXY_TESTNET;
 // rpc
 extern unsigned short const RPC_PORT;
 extern unsigned short const RPC_PORT_TESTNET;
+
+// pchMessageStart
+extern unsigned char pchMessageStart[4];
+extern unsigned char pchMessageStartTestnet[4];
+
 
 // extern const int N_COLORS;
 // extern const int N_COLOR_BYTES;
@@ -170,5 +181,13 @@ void FillNets(const std::map<int, int64_t> &mapDebit,
               const std::map<int, int64_t> &mapCredit,
               std::map<int, int64_t> &mapNet);
 
+// minting
+int64_t GetTargetSpacing(bool fProofOfStake);
+int GetStakeTimestampMask();
+// int GetLastFairLaunchBlock();
+#if PROOF_MODEL == PURE_POS
+int GetLastPoWBlock();
+int GetFirstPoSBlock();
+#endif
 
 #endif  // PNTS_COLORS_H

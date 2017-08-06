@@ -9,16 +9,16 @@
         <key>CFBundlePackageType</key>
         <string>APPL</string>
         <key>CFBundleGetInfoString</key>
-        <string>PointCoin [XPP] 1.0.2.0</string>
+        <string>PointCoin [XPP] 1.2.0.0</string>
         <key>CFBundleExecutable</key>
         <string>PointCoin-Qt</string>
         <key>CFBundleIdentifier</key>
         <string>us.pointcoin.pointcoin-qt</string>
         <key>CFBundleShortVersionString</key>
-        <string>1.0.2.0</string>
+        <string>1.2.0.0</string>
         <key>CFBundleSignature</key>
         <string>PPt5</string>
         <key>CFBundleVersion</key>
-        <string>1.0.2.0</string>
+        <string>1.2.0.0</string>
 </dict>
 </plist>
