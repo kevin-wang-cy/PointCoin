@@ -4,6 +4,16 @@
 
 //////////////////////////////////////////////////////////////////////
 ///
+/// Forks
+///
+//////////////////////////////////////////////////////////////////////
+int const FEE_ADJUSTMENT_01_BLOCK = 67600;
+
+// Sunday, August 6, 2017 7:00:00 PM GMT
+unsigned int const STAKE_ADJUSTMENT_01_TIME = 1502046000;
+
+//////////////////////////////////////////////////////////////////////
+///
 /// Network Constants
 ///
 //////////////////////////////////////////////////////////////////////
@@ -23,6 +33,51 @@ unsigned short const DEFAULT_PROXY_TESTNET = 19050;
 unsigned short const RPC_PORT = 22888;
 unsigned short const RPC_PORT_TESTNET = 22999;
 
+// The message start string is designed to be unlikely to occur in normal data.
+// The characters are rarely used upper ASCII, not valid as UTF-8, and produce
+// a large 4-byte int at any alignment.
+unsigned char pchMessageStart[4] = {  0xfd, 0xeb, 0xdf, 0xfb  };
+unsigned char pchMessageStartTestnet[4] = { 0xec, 0xda, 0xfe, 0xea };
+
+
+//////////////////////////////////////////////////////////////////////
+///
+/// Minting Constants
+///
+//////////////////////////////////////////////////////////////////////
+// target spacings
+static const unsigned int nTargetSpacingPoS = 120;        // 2min
+static const unsigned int nTargetSpacingPoW = 120;        // 2min
+static const unsigned int nTargetSpacingPoSTestNet = 30;  // 30sec
+static const unsigned int nTargetSpacingPoWTestNet = 30;  // 30sec
+
+// To decrease granularity of timestamp
+// Relative prime to block spacing target
+static const int STAKE_TIMESTAMP_MASK = 17;
+static const int STAKE_TIMESTAMP_MASK_TESTNET = 1;
+
+// block cutoffs
+// static const int LAST_FAIR_LAUNCH_BLOCK = 0;          // 0 * 6
+// static const int LAST_FAIR_LAUNCH_BLOCK_TESTNET = 0;  // 0 * 6
+
+
+//////////////////////////////////////////////////////////////////////
+///
+/// PoS Constants
+///
+//////////////////////////////////////////////////////////////////////
+#if PROOF_MODEL == PURE_POS
+// must have a last PoW block if it is to be pure PoS
+// optional overlap between PoW and PoS
+// 2 min PoW and 2 min PoS
+int LAST_POW_BLOCK = 5760;   // 15760 -> 4 days
+int FIRST_POS_BLOCK = 5761;  // LAST_FIRST_DAY_BLOCK + 1
+static const int LAST_POW_BLOCK_TESTNET = 5760;
+static const int FIRST_POS_BLOCK_TESTNET = 5761;
+#elif PROOF_MODEL == MIXED_POW_POS
+//
+#endif  // PROOF_MODEL
+
 
 //////////////////////////////////////////////////////////////////////
 ///
@@ -31,10 +86,10 @@ unsigned short const RPC_PORT_TESTNET = 22999;
 //////////////////////////////////////////////////////////////////////
 
 // make sure these are consistent with nStakeMinAge
-// 10 min at 1 min block times
-static const int nStakeMinConfirmationsTestnet = 10;
 // 8 hr at 1 min block times
 static const int nStakeMinConfirmations = 480;
+// 10 min at 1 min block times
+static const int nStakeMinConfirmationsTestnet = 10;
 
 // avoid counting zeros
 const int64_t BASE_COIN = 100000000;
@@ -115,11 +170,11 @@ const int64_t MIN_RELAY_TX_FEE[N_COLORS] = {0, BASE_CENT * 15 };
 
 
 // (0.015 per byte)
-const int64_t COMMENT_FEE_PER_CHAR[N_COLORS] = { 0, BASE_CENT * 15 / 10 };
+const int64_t COMMENT_FEE_PER_CHAR[N_COLORS] = { 0, (BASE_CENT * 15) / 1000 };
 
 
 // op returns can be big, but they are expensive (0.015 per byte)
-const int64_t OP_RET_FEE_PER_CHAR[N_COLORS] = { 0, BASE_CENT * 23 / 10 };
+const int64_t OP_RET_FEE_PER_CHAR[N_COLORS] = { 0, (BASE_CENT * 23) / 1000 };
 
 
 // Can the currency be recovered by fee scavenging?
@@ -128,11 +183,11 @@ const bool SCAVENGABLE[N_COLORS] = { false, true };
 
 
 //                                          -     XPP
-const int64_t MIN_TXOUT_AMOUNT[N_COLORS] = {0, BASE_CENT };
+const int64_t MIN_TXOUT_AMOUNT[N_COLORS] = {0, BASE_CENT / 100 };
 
 
 //                                          -     XPP
-const int64_t MIN_INPUT_VALUE[N_COLORS] = {0,  BASE_CENT };
+const int64_t MIN_INPUT_VALUE[N_COLORS] = {0,  BASE_CENT / 100 };
 
 
 // combine threshold for creating coinstake
@@ -416,5 +471,46 @@ void FillNets(const std::map<int, int64_t> &mapDebit,
             mapNet[itdeb->first] = -itdeb->second;
         }
     }
+}
+
+
+//////////////////////////////////////////////////////////////////////
+///
+/// Minting
+///
+//////////////////////////////////////////////////////////////////////
+
+int64_t GetTargetSpacing(bool fProofOfStake)
+{
+    int64_t nTargetSpacing = nTargetSpacingPoS;
+    if (fProofOfStake)
+    {
+        nTargetSpacing = fTestNet ? nTargetSpacingPoSTestNet : nTargetSpacingPoS;
+    }
+    else
+    {
+        nTargetSpacing = fTestNet ? nTargetSpacingPoWTestNet : nTargetSpacingPoW;
+    }
+    return nTargetSpacing;
+}
+
+int GetStakeTimestampMask()
+{
+   return fTestNet ? STAKE_TIMESTAMP_MASK_TESTNET : STAKE_TIMESTAMP_MASK;
+}
+
+// int GetLastFairLaunchBlock()
+// {
+//     return fTestNet ? LAST_FAIR_LAUNCH_BLOCK_TESTNET : LAST_FAIR_LAUNCH_BLOCK;
+// }
+
+int GetLastPoWBlock()
+{
+    return fTestNet ? LAST_POW_BLOCK_TESTNET : LAST_POW_BLOCK;
+}
+
+int GetFirstPoSBlock()
+{
+    return fTestNet ? FIRST_POS_BLOCK_TESTNET : FIRST_POS_BLOCK;
 }
 

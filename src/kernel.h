@@ -6,10 +6,6 @@
 
 #include "main.h"
 
-// To decrease granularity of timestamp
-// Relative prime to block spacing target
-static const int STAKE_TIMESTAMP_MASK_TESTNET = 15;
-static const int STAKE_TIMESTAMP_MASK = 17;
 // MODIFIER_INTERVAL: time to elapse before new modifier is computed
 extern unsigned int nModifierInterval;
 

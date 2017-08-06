@@ -66,6 +66,10 @@ void WalletTxToJSON(const CWalletTx& wtx, Object& entry)
     entry.push_back(Pair("txid", wtx.GetHash().GetHex()));
     entry.push_back(Pair("time", (boost::int64_t)wtx.GetTxTime()));
     entry.push_back(Pair("timereceived", (boost::int64_t)wtx.nTimeReceived));
+    if (wtx.strTxComment != "")
+    {
+        entry.push_back(Pair("tx-comment", wtx.strTxComment));
+    }
     BOOST_FOREACH(const PAIRTYPE(string,string)& item, wtx.mapValue)
         entry.push_back(Pair(item.first, item.second));
 }
@@ -660,10 +664,11 @@ Value verifymessage(const Array& params, bool fHelp)
 
 Value getreceivedbyaddress(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() < 1 || params.size() > 2)
+    if (fHelp || params.size() < 1 || params.size() > 3)
         throw runtime_error(
-            "getreceivedbyaddress <pointcoinaddress> [minconf=1]\n"
-            "Returns the total amount received by <pointcoinaddress> in transactions with at least [minconf] confirmations.");
+            "getreceivedbyaddress <pointcoinaddress> [minconf=1] [multisig=false]\n"
+            "Returns the total amount received by <pointcoinaddress> in transactions with at least [minconf] confirmations.\n"
+            "If [multisig] is then partial-owner multisig accounts are included.");
 
     // Bitcoin address
     CBitcoinAddress address = CBitcoinAddress(params[0].get_str());
@@ -671,7 +676,14 @@ Value getreceivedbyaddress(const Array& params, bool fHelp)
     if (!address.IsValid())
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid pointcoin address");
     scriptPubKey.SetDestination(address.Get());
-    if (!IsMine(*pwalletMain,scriptPubKey))
+
+    bool fMultiSig = GetBoolArg("-enablemultisigs", false);
+    if (params.size() > 2)
+    {
+       fMultiSig = params[2].get_bool();
+    }
+
+    if (!IsMine(*pwalletMain,scriptPubKey, fMultiSig))
         return (double)0.0;
 
     // Minimum confirmations
@@ -712,10 +724,11 @@ void GetAccountAddresses(string strAccount, set<CTxDestination>& setAddress)
 
 Value getreceivedbyaccount(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() < 1 || params.size() > 3)
+    if (fHelp || params.size() < 1 || params.size() > 4)
         throw runtime_error(
-            "getreceivedbyaccount <account> [minconf=1] [allcurrencies=false]\n"
+            "getreceivedbyaccount <account> [minconf=1] [allcurrencies=false] [multisig=false]\n"
             "If [allcurrencies] is false, then only the default currency is used.\n"
+            "If [multisig] is true, then partial-owner multisig accounts are included.\n"
             "Returns the total amount received by addresses with <account> in transactions with at least [minconf] confirmations.");
 
     accountingDeprecationCheck();
@@ -738,6 +751,12 @@ Value getreceivedbyaccount(const Array& params, bool fHelp)
     set<CTxDestination> setAddress;
     GetAccountAddresses(strAccount, setAddress);
 
+    bool fMultiSig = GetBoolArg("-enablemultisigs", false);
+    if (params.size() > 3)
+    {
+       fMultiSig = params[3].get_bool();
+    }
+
     // Tally
     std::vector<int64_t> vAmount(N_COLORS, 0);
     for (map<uint256, CWalletTx>::iterator it = pwalletMain->mapWallet.begin(); it != pwalletMain->mapWallet.end(); ++it)
@@ -749,7 +768,7 @@ Value getreceivedbyaccount(const Array& params, bool fHelp)
         BOOST_FOREACH(const CTxOut& txout, wtx.vout)
         {
             CTxDestination address;
-            if (ExtractDestination(txout.scriptPubKey, address) && IsMine(*pwalletMain, address) && setAddress.count(address))
+            if (ExtractDestination(txout.scriptPubKey, address) && IsMine(*pwalletMain, address, fMultiSig) && setAddress.count(address))
                 if (wtx.GetDepthInMainChain() >= nMinDepth)
                 {
                     vAmount[txout.nColor] += txout.nValue;
@@ -775,7 +794,7 @@ Value getreceivedbyaccount(const Array& params, bool fHelp)
 
 
 
-int64_t GetAccountBalance(CWalletDB& walletdb, const string& strAccount, int nMinDepth, int nColor)
+int64_t GetAccountBalance(CWalletDB& walletdb, const string& strAccount, int nMinDepth, int nColor, bool fMultiSig)
 {
     int64_t nBalance = 0;
 
@@ -787,7 +806,7 @@ int64_t GetAccountBalance(CWalletDB& walletdb, const string& strAccount, int nMi
             continue;
 
         int64_t nReceived, nSent, nFee;
-        wtx.GetAccountAmounts(nColor, strAccount, nReceived, nSent, nFee);
+        wtx.GetAccountAmounts(nColor, strAccount, nReceived, nSent, nFee, fMultiSig);
 
         if (nReceived != 0 && wtx.GetDepthInMainChain() >= nMinDepth && wtx.GetBlocksToMaturity() == 0)
             nBalance += nReceived;
@@ -800,10 +819,10 @@ int64_t GetAccountBalance(CWalletDB& walletdb, const string& strAccount, int nMi
     return nBalance;
 }
 
-int64_t GetAccountBalance(const string& strAccount, int nMinDepth, int nColor)
+int64_t GetAccountBalance(const string& strAccount, int nMinDepth, int nColor, bool fMultiSig)
 {
     CWalletDB walletdb(pwalletMain->strWalletFile);
-    return GetAccountBalance(walletdb, strAccount, nMinDepth, nColor);
+    return GetAccountBalance(walletdb, strAccount, nMinDepth, nColor, fMultiSig);
 }
 
 Value getbalances(const Array& params, bool fHelp)
@@ -840,13 +859,14 @@ Value getbalances(const Array& params, bool fHelp)
 
 Value getbalance(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() > 3)
+    if (fHelp || params.size() > 4)
         throw runtime_error(
-            "getbalance [account] [minconf=1] [ticker]\n"
+            "getbalance [account] [minconf=1] [ticker] [multisig=false]\n"
             "If [account] is not specified, returns the server's total available balance.\n"
             "If [account] is specified, returns the balance in the account.\n"
             "If [ticker] is not given, returns balance for default currency.\n"
-            "Returns balance for a currency.\n");
+            "If [multisig] is true, then partial-owner multisig transactions count toward balance calculation.\n"
+            "Returns balance for a currency.");
 
     checkDefaultCurrency();
 
@@ -874,6 +894,12 @@ Value getbalance(const Array& params, bool fHelp)
         nColor = nDefaultCurrency;
     }
 
+    bool fMultiSig = GetBoolArg("-enablemultisigs", false);
+    if (params.size() > 3)
+    {
+       fMultiSig = params[3].get_bool();
+    }
+
     if (params[0].get_str() == "*") {
         // Calculate total balance a different way from GetBalance()
         // (GetBalance() sums up all unspent TxOuts)
@@ -898,7 +924,7 @@ Value getbalance(const Array& params, bool fHelp)
             string strSentAccount;
             list<pair<CTxDestination, int64_t> > listReceived;
             list<pair<CTxDestination, int64_t> > listSent;
-            wtx.GetAmounts(nColor, listReceived, listSent, allFee, strSentAccount);
+            wtx.GetAmounts(nColor, listReceived, listSent, allFee, strSentAccount, fMultiSig);
             if (wtx.GetDepthInMainChain() >= nMinDepth && wtx.GetBlocksToMaturity() == 0)
             {
                 BOOST_FOREACH(const PAIRTYPE(CTxDestination,int64_t)& r, listReceived)
@@ -915,7 +941,7 @@ Value getbalance(const Array& params, bool fHelp)
 
     string strAccount = AccountFromValue(params[0]);
 
-    int64_t nBalance = GetAccountBalance(strAccount, nMinDepth, nColor);
+    int64_t nBalance = GetAccountBalance(strAccount, nMinDepth, nColor, fMultiSig);
 
     return ValueFromAmount(nBalance, nColor);
 }
@@ -1007,6 +1033,9 @@ Value sendfrom(const Array& params, bool fHelp)
 
             + HelpRequiringPassphrase());
 
+    // will not create and execute transactions with multisig
+    static const bool fMultiSig = false;
+
     unsigned int nServiceTypeID = SERVICE_NONE;
     string strAccount = AccountFromValue(params[0]);
     CBitcoinAddress address(params[1].get_str());
@@ -1046,7 +1075,7 @@ Value sendfrom(const Array& params, bool fHelp)
     EnsureWalletIsUnlocked();
 
     // Check funds
-    int64_t nBalance = GetAccountBalance(strAccount, nMinDepth, nColor);
+    int64_t nBalance = GetAccountBalance(strAccount, nMinDepth, nColor, fMultiSig);
     if (nAmount > nBalance)
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, "Account has insufficient funds");
 
@@ -1069,6 +1098,9 @@ Value sendmany(const Array& params, bool fHelp)
             "[tx-comment] max size is " + strprintf("%d", MAX_TX_COMMENT_LEN) + "\n"
             "[product-id] is a positive integer"
             + HelpRequiringPassphrase());
+
+    // will not create and execute transactions with multisig
+    static const bool fMultiSig = false;
 
     unsigned int nServiceTypeID = SERVICE_NONE;
 
@@ -1137,7 +1169,7 @@ Value sendmany(const Array& params, bool fHelp)
     EnsureWalletIsUnlocked();
 
     // Check funds
-    int64_t nBalance = GetAccountBalance(strAccount, nMinDepth, nColor);
+    int64_t nBalance = GetAccountBalance(strAccount, nMinDepth, nColor, fMultiSig);
     if (totalAmount > nBalance)
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, "Account has insufficient funds");
 
@@ -1164,7 +1196,7 @@ Value sendmany(const Array& params, bool fHelp)
 }
 
 /**
- * Used by addmultisigaddress / createmultisig:
+ * Used by addmultisigaddress & createmultisig:
  */
 CScript _createmultisig_redeemScript(const Array& params)
 {
@@ -1403,6 +1435,12 @@ Value ListReceived(const Array& params, bool fByAccounts)
         fAllColors = params[2].get_bool();
     }
 
+    bool fMultiSig = GetBoolArg("-enablemultisigs", false);
+    if (params.size() > 3)
+    {
+       fMultiSig = params[3].get_bool();
+    }
+
     // Tally
     map<CBitcoinAddress, tallyitem> mapTally;
     for (map<uint256, CWalletTx>::iterator it = pwalletMain->mapWallet.begin(); it != pwalletMain->mapWallet.end(); ++it)
@@ -1419,7 +1457,7 @@ Value ListReceived(const Array& params, bool fByAccounts)
         BOOST_FOREACH(const CTxOut& txout, wtx.vout)
         {
             CTxDestination address;
-            if (!ExtractDestination(txout.scriptPubKey, address) || !IsMine(*pwalletMain, address))
+            if (!ExtractDestination(txout.scriptPubKey, address) || !IsMine(*pwalletMain, address, fMultiSig))
                 continue;
 
             // coloring of bitcoin addresses ensures that each tally item has only one color
@@ -1517,28 +1555,41 @@ Value ListReceived(const Array& params, bool fByAccounts)
 
 Value listreceivedbyaddress(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() > 2)
+    if (fHelp || params.size() > 3)
         throw runtime_error(
-            "listreceivedbyaddress [minconf=1] [includeempty=false]\n"
+            "listreceivedbyaddress [minconf=1] [includeempty=false] [multisig=false]\n"
             "[minconf] is the minimum number of confirmations before payments are included.\n"
             "[includeempty] whether to include addresses that haven't received any payments.\n"
+            "[multisig] whether to include partial-owner multisig accounts.\n"
             "Returns an array of objects containing:\n"
             "  \"address\" : receiving address\n"
             "  \"account\" : the account of the receiving address\n"
             "  \"amount\" : total amount received by the address\n"
             "  \"confirmations\" : number of confirmations of the most recent transaction included");
 
-    return ListReceived(params, false);
+    Array aryNewParams;
+    for (size_t i = 0; i < params.size(); ++i)
+    {
+       if (i == 2)
+       {
+          // "normalize" parameters for use by ListReceived()
+          aryNewParams.push_back(Value(false));
+       }
+       aryNewParams.push_back(params[i]);
+    }
+
+    return ListReceived(aryNewParams, false);
 }
 
 Value listreceivedbyaccount(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() > 2)
+    if (fHelp || params.size() > 4)
         throw runtime_error(
-            "listreceivedbyaccount [minconf=1] [includeempty=false] [allcurrencies=false]\n"
+            "listreceivedbyaccount [minconf=1] [includeempty=false] [allcurrencies=false] [multisig=false]\n"
             "[minconf] is the minimum number of confirmations before payments are included.\n"
             "[includeempty] whether to include accounts that haven't received any payments.\n"
             "[allcurrencies] whether to include information for every currency for every account.\n"
+            "[multisig] whether to include partial-owner multisig accounts.\n"
             "Returns an array of objects containing:\n"
             "  \"account\" : the account of the receiving addresses\n"
             "  \"amount\" : total amount received by addresses with this account\n"
@@ -1559,7 +1610,8 @@ static void MaybePushAddress(Object & entry, const CTxDestination &dest, int nCo
         entry.push_back(Pair("address", addr.ToString()));
 }
 
-void ListTransactions(const CWalletTx& wtx, const string& strAccount, int nMinDepth, bool fLong, Array& ret)
+void ListTransactions(const CWalletTx& wtx, const string& strAccount,
+                      int nMinDepth, bool fLong, Array& ret, bool fMultiSig)
 {
     int64_t nFee;
     string strSentAccount;
@@ -1578,7 +1630,7 @@ void ListTransactions(const CWalletTx& wtx, const string& strAccount, int nMinDe
         int nColor = (int) *pColor;
         // int nFeeColor = FEE_COLOR[nColor];
 
-        wtx.GetAmounts(nColor, listReceived, listSent, nFee, strSentAccount);
+        wtx.GetAmounts(nColor, listReceived, listSent, nFee, strSentAccount, fMultiSig);
 
         if ((!wtx.IsCoinStake()) && (!listSent.empty() || nFee != 0) &&
                                         (fAllAccounts || strAccount == strSentAccount))
@@ -1604,7 +1656,7 @@ void ListTransactions(const CWalletTx& wtx, const string& strAccount, int nMinDe
     {
         int nColor = (int) *pColor;
 
-        wtx.GetAmounts(nColor, listReceived, listSent, nFee, strSentAccount);
+        wtx.GetAmounts(nColor, listReceived, listSent, nFee, strSentAccount, fMultiSig);
 
         if (listReceived.size() > 0 && wtx.GetDepthInMainChain() >= nMinDepth)
         {
@@ -1672,9 +1724,9 @@ void AcentryToJSON(const CAccountingEntry& acentry, const string& strAccount, Ar
 
 Value listtransactions(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() > 3)
+    if (fHelp || params.size() > 4)
         throw runtime_error(
-            "listtransactions [account] [count=10] [from=0]\n"
+            "listtransactions [account] [count=10] [from=0] [multisig=true]\n"
             "Returns up to [count] most recent transactions skipping the first [from] transactions for account [account].");
 
     string strAccount = "*";
@@ -1686,6 +1738,13 @@ Value listtransactions(const Array& params, bool fHelp)
     int nFrom = 0;
     if (params.size() > 2)
         nFrom = params[2].get_int();
+
+    bool fMultiSig = GetBoolArg("-enablemultisigs", false);
+    if (params.size() > 3)
+    {
+       fMultiSig = params[3].get_bool();
+    }
+
 
     if (nCount < 0)
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Negative count");
@@ -1702,7 +1761,7 @@ Value listtransactions(const Array& params, bool fHelp)
     {
         CWalletTx *const pwtx = (*it).second.first;
         if (pwtx != 0)
-            ListTransactions(*pwtx, strAccount, 0, true, ret);
+            ListTransactions(*pwtx, strAccount, 0, true, ret, fMultiSig);
         CAccountingEntry *const pacentry = (*it).second.second;
         if (pacentry != 0)
             AcentryToJSON(*pacentry, strAccount, ret);
@@ -1730,10 +1789,11 @@ Value listtransactions(const Array& params, bool fHelp)
 
 Value listaccounts(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() > 2)
+    if (fHelp || params.size() > 3)
         throw runtime_error(
-            "listaccounts [minconf=1] [allcurrencies=false]\n"
+            "listaccounts [minconf=1] [allcurrencies=false] [multisig=false]\n"
             "If [allcurrencies] is false, then only the default currency is used.\n"
+            "If [multisig] is true, then include partial-owner multisig accounts.\n"
             "Returns Object that has account names as keys, account balances as values.");
 
     accountingDeprecationCheck();
@@ -1750,9 +1810,16 @@ Value listaccounts(const Array& params, bool fHelp)
          fAllColors = params[2].get_bool();
     }
 
+    bool fMultiSig = GetBoolArg("-enablemultisigs", false);
+    if (params.size() > 2)
+    {
+       fMultiSig = params[2].get_bool();
+    }
+
+
     map<string, std::vector<int64_t> > mapAccountBalances;
     BOOST_FOREACH(const PAIRTYPE(CTxDestination, string)& entry, pwalletMain->mapAddressBook) {
-        if (IsMine(*pwalletMain, entry.first)) // This address belongs to me
+        if (IsMine(*pwalletMain, entry.first, fMultiSig)) // This address belongs to me
         {
             mapAccountBalances[entry.second] = std::vector<int64_t>(N_COLORS, 0);
         }
@@ -1784,7 +1851,7 @@ Value listaccounts(const Array& params, bool fHelp)
             {
                 continue;
             }
-            wtx.GetAmounts(nColor, listReceived, listSent, nFee, strSentAccount);
+            wtx.GetAmounts(nColor, listReceived, listSent, nFee, strSentAccount, fMultiSig);
             mapAccountBalances[strSentAccount][nColor] -= nFee;
             BOOST_FOREACH(const PAIRTYPE(CTxDestination, int64_t)& s, listSent)
                 mapAccountBalances[strSentAccount][nColor] -= s.second;
@@ -1836,10 +1903,11 @@ Value listaccounts(const Array& params, bool fHelp)
 
 Value listsinceblock(const Array& params, bool fHelp)
 {
-    if (fHelp)
+    if (fHelp || params.size() > 3)
         throw runtime_error(
-            "listsinceblock [blockhash] [target-confirmations]\n"
-            "Get all transactions in blocks since block [blockhash], or all transactions if omitted");
+            "listsinceblock [blockhash] [target-confirmations] [multisig=false]\n"
+            "Get all transactions in blocks since block [blockhash], or all transactions if omitted\n"
+            "If [multisig] is true, then partial-owner multisig transactions are included.");
 
     CBlockIndex *pindex = NULL;
     int target_confirms = 1;
@@ -1860,6 +1928,12 @@ Value listsinceblock(const Array& params, bool fHelp)
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid parameter");
     }
 
+    bool fMultiSig = GetBoolArg("-enablemultisigs", false);
+    if (params.size() > 2)
+    {
+       fMultiSig = params[2].get_bool();
+    }
+
     int depth = pindex ? (1 + nBestHeight - pindex->nHeight) : -1;
 
     Array transactions;
@@ -1869,7 +1943,7 @@ Value listsinceblock(const Array& params, bool fHelp)
         CWalletTx tx = (*it).second;
 
         if (depth == -1 || tx.GetDepthInMainChain() < depth)
-            ListTransactions(tx, "*", 0, true, transactions);
+            ListTransactions(tx, "*", 0, true, transactions, fMultiSig);
     }
 
     uint256 lastblock;
@@ -1904,6 +1978,9 @@ Value gettransaction(const Array& params, bool fHelp)
             "gettransaction <txid>\n"
             "Get detailed information about <txid>");
 
+    // there is no reason to disqualify a multisig tx
+    static const bool fMultiSig = true;
+
     uint256 hash;
     hash.SetHex(params[0].get_str());
 
@@ -1918,14 +1995,14 @@ Value gettransaction(const Array& params, bool fHelp)
         // fee is possible in only one color (for now)
         int nFeeColor = FEE_COLOR[wtx.GetColor()];
 
-        int64_t nTxFee = (wtx.IsFromMe() ?
-                            (wtx.GetValueOut(nFeeColor) - wtx.GetDebit(nFeeColor)) : 0);
+        int64_t nTxFee = (wtx.IsFromMe(fMultiSig) ?
+                            (wtx.GetValueOut(nFeeColor) - wtx.GetDebit(nFeeColor, fMultiSig)) : 0);
 
         Object objAmt;
         for (int nColor = 1; nColor < N_COLORS; ++nColor)
         {
-            int64_t nCredit = wtx.GetCredit(nColor);
-            int64_t nDebit = wtx.GetDebit(nColor);
+            int64_t nCredit = wtx.GetCredit(nColor, fMultiSig);
+            int64_t nDebit = wtx.GetDebit(nColor, fMultiSig);
             int64_t nNet = nCredit - nDebit;
             int64_t nFee = ((nColor == nFeeColor) ? nTxFee : 0);
             objAmt.push_back(Pair(COLOR_TICKER[nColor], ValueFromAmount(nNet - nFee, nColor)));
@@ -1933,7 +2010,7 @@ Value gettransaction(const Array& params, bool fHelp)
         entry.push_back(Pair("amounts", objAmt));
 
 
-        if (wtx.IsFromMe())
+        if (wtx.IsFromMe(fMultiSig))
         {
             Object objFee;
             objFee.push_back(Pair(COLOR_TICKER[nFeeColor],
@@ -1944,7 +2021,7 @@ Value gettransaction(const Array& params, bool fHelp)
         WalletTxToJSON(wtx, entry);
 
         Array details;
-        ListTransactions(pwalletMain->mapWallet[hash], "*", 0, false, details);
+        ListTransactions(pwalletMain->mapWallet[hash], "*", 0, false, details, fMultiSig);
         entry.push_back(Pair("details", details));
     }
     else
@@ -2375,7 +2452,11 @@ Value validateaddress(const Array& params, bool fHelp)
             "Return information about <pointcoinaddress>.\n"
             "If <ticker> is given, the address must be the correct currency.");
 
-    int nColor = nDefaultCurrency;
+    // not a balance calculation, so multisig is safe
+    static const bool fMultiSig = true;
+
+    // int nColor = nDefaultCurrency;
+    int nColor = (int) PNTS_COLOR_NONE;
 
     if (params.size() > 1)
     {
@@ -2405,7 +2486,7 @@ Value validateaddress(const Array& params, bool fHelp)
         CTxDestination dest = address.Get();
         string currentAddress = address.ToString();
         ret.push_back(Pair("address", currentAddress));
-        bool fMine = IsMine(*pwalletMain, dest);
+        bool fMine = IsMine(*pwalletMain, dest, fMultiSig);
         ret.push_back(Pair("ismine", fMine));
         if (fMine) {
             Object detail = boost::apply_visitor(DescribeAddressVisitor(), dest);
@@ -2425,7 +2506,11 @@ Value validatepubkey(const Array& params, bool fHelp)
             "validatepubkey <pointcoinpubkey> [ticker]\n"
             "Return information about <pointcoinpubkey>.");
 
-    int nColor = (int) PNTS_COLOR_NONE;
+    // not a balance calculation, so multisig is safe
+    static const bool fMultiSig = true;
+
+    int nColor = nDefaultCurrency;
+
     if (params.size() > 1)
     {
         std::string strTicker = params[1].get_str();
@@ -2461,7 +2546,7 @@ Value validatepubkey(const Array& params, bool fHelp)
         {
             ret.push_back(Pair("address", currentAddress));
         }
-        bool fMine = IsMine(*pwalletMain, dest);
+        bool fMine = IsMine(*pwalletMain, keyID, fMultiSig);
         ret.push_back(Pair("ismine", fMine));
         ret.push_back(Pair("iscompressed", isCompressed));
         if (fMine) {
